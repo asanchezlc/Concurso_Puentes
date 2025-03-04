@@ -11,9 +11,10 @@ import threading
 import time
 import numpy as np
 import datetime
+import queue
 
 # Variables for GUI configuration
-refresh_time = 500  # ms [same as arduino readings]
+refresh_time = 1000  # ms [same as Arduino readings]
 GUI_title = "Fase Provincial - II Concurso Nacional de Puentes Agustín de Betancourt - ETSICCP GRANADA"
 logo_folder = "logos"
 logo_ugr_name = "ugr.png"
@@ -29,37 +30,41 @@ sensor_data_2 = []
 pause = False  # Variable to track if data updates are paused
 ser = None  # Serial connection
 
+# Create a global Queue to store incoming serial data
+data_queue = queue.Queue()
+
 # Function to establish serial connection
 def connect_arduino():
     global ser
     try:
         ser = serial.Serial(arduino_port, baud_rate, timeout=1)
         print(f"[INFO] Conectado a {arduino_port}")
-        time.sleep(2)  # Esperar a que Arduino esté listo
+        time.sleep(2)  # Wait for Arduino to be ready
     except serial.SerialException:
         print(f"[ERROR] No se pudo abrir el puerto {arduino_port}")
-        ser = None  # No hay conexión activa
+        ser = None  # No active connection
 
 # Function to read real sensor data from Arduino
 def read_arduino_data():
-    """Reads and returns data from the Arduino serial connection."""
+    """Continuously reads data from Arduino and stores it in a queue."""
     global ser
 
-    if ser is None or not ser.is_open:  # If disconnected, try to reconnect
-        print("[WARNING] Conexión perdida. Intentando reconectar...")
-        connect_arduino()
-        return None, None, None
+    while True:
+        if ser is None or not ser.is_open:
+            print("[WARNING] Conexión perdida. Intentando reconectar...")
+            connect_arduino()
+            time.sleep(1)
+            continue  # Retry connection
 
-    if ser and ser.in_waiting > 0:  # Verify if available data
-        try:
-            data = ser.readline().decode('utf-8').strip()
-            if data:
-                t, hx711_value, voltage = data.split()  # Separar los valores
-                return int(t), int(hx711_value), float(voltage)
-        except ValueError:
-            print("[ERROR] Formato de datos incorrecto:", data)
-            return None, None, None
-
+        if ser.in_waiting > 0:  # Check if data is available
+            try:
+                data = ser.readline().decode('utf-8').strip()
+                if data:
+                    delta_t, hx711_value, voltage = data.split()
+                    data_queue.put((int(delta_t), int(hx711_value), float(voltage)))  # Store data in queue
+            except ValueError:
+                print("[ERROR] Formato de datos incorrecto:", data)
+                continue  # Skip bad data
 
 # Function to update the graphs
 def update_graph(frame):
@@ -68,26 +73,34 @@ def update_graph(frame):
     if pause or ser is None:  # If paused or no serial connection, do not update
         return
 
-    data = read_arduino_data()
-    if data is None:  # If no valid data, use last available data
+    # Retrieve the latest available data from the queue
+    if len(time_data) > 0:
+        t = time_data[-1]
+    else:
+        t = 0
+    while not data_queue.empty():
+        delta_t, hx711_value, voltage = data_queue.get()
+        t = delta_t + t
+        time_data.append(t)
+        sensor_data_1.append(hx711_value)
+        sensor_data_2.append(voltage)
+    else:
         print("[WARNING] No se pudo leer datos, reutilizando último valor.")
         if len(time_data) > 0:
             t, hx711_value, voltage = time_data[-1], sensor_data_1[-1], sensor_data_2[-1]
         else:
             t, hx711_value, voltage = 0, 0, 0  # Default values if no previous data
-    else:
-        t, hx711_value, voltage = data
 
-    if t is not None and hx711_value is not None and voltage is not None:
-        time_data.append(t)
-        sensor_data_1.append(hx711_value)
-        sensor_data_2.append(voltage)
+        if t is not None and hx711_value is not None and voltage is not None:
+            time_data.append(t)
+            sensor_data_1.append(hx711_value)
+            sensor_data_2.append(voltage)
 
     n_readings = 100
 
     # Update first graph
     ax1.clear()
-    ax1.plot(time_data[-n_readings: -1], sensor_data_1[-n_readings: -1], label="Célula de carga", color="blue")
+    ax1.plot(time_data[-n_readings:], sensor_data_1[-n_readings:], label="Célula de carga", color="blue")
     ax1.set_title("Carga aplicada")
     ax1.set_xlabel("Tiempo (s)")
     ax1.set_ylabel("BITS (kg)")
@@ -95,15 +108,16 @@ def update_graph(frame):
 
     # Update second graph
     ax2.clear()
-    ax2.plot(time_data[-n_readings: -1], sensor_data_2[-n_readings: -1], label="Potenciómetro", color="red")
+    ax2.plot(time_data[-n_readings:], sensor_data_2[-n_readings:], label="Potenciómetro", color="red")
     ax2.set_title("Medida de deformación en centro de vano")
     ax2.set_xlabel("Tiempo (s)")
     ax2.set_ylabel("VOLTAJE (mm)")
     ax2.legend(loc="lower left")
+
     if not (voltage is None and hx711_value is None):
         delta_t = datetime.datetime.now().timestamp() - last_timestamp
         last_timestamp = datetime.datetime.now().timestamp()
-        print(f"Tiempo: {t} | Peso (HX711): {hx711_value} | Voltaje (Potenciómetro): {voltage:.2f} V | Δt: {delta_t:.2f} s")
+        print(f"Tiempo: {delta_t} | Peso (HX711): {hx711_value} | Voltaje (Potenciómetro): {voltage:.2f} V | Δt: {delta_t:.2f} s")
 
     fig.tight_layout()
 
@@ -145,22 +159,25 @@ logo_ugr_path = os.path.join(logo_folder, logo_ugr_name)
 logo_etsiccp_path = os.path.join(logo_folder, logo_etsiccp_name)
 logo_grupo_puentes_path = os.path.join(logo_folder, logo_grupo_puentes_name)
 
-logo_ugr_img = Image.open(logo_ugr_path).resize((70, 70), Image.Resampling.LANCZOS)
-logo_ugr_tk = ImageTk.PhotoImage(logo_ugr_img)
-logo_etsiccp_img = Image.open(logo_etsiccp_path).resize((70, 70), Image.Resampling.LANCZOS)
-logo_etsiccp_tk = ImageTk.PhotoImage(logo_etsiccp_img)
-logo_grupo_puentes_img = Image.open(logo_grupo_puentes_path).resize((70, 70), Image.Resampling.LANCZOS)
-logo_grupo_puentes_tk = ImageTk.PhotoImage(logo_grupo_puentes_img)
+try:
+    logo_ugr_img = Image.open(logo_ugr_path).resize((70, 70), Image.Resampling.LANCZOS)
+    logo_ugr_tk = ImageTk.PhotoImage(logo_ugr_img)
+    logo_etsiccp_img = Image.open(logo_etsiccp_path).resize((70, 70), Image.Resampling.LANCZOS)
+    logo_etsiccp_tk = ImageTk.PhotoImage(logo_etsiccp_img)
+    logo_grupo_puentes_img = Image.open(logo_grupo_puentes_path).resize((70, 70), Image.Resampling.LANCZOS)
+    logo_grupo_puentes_tk = ImageTk.PhotoImage(logo_grupo_puentes_img)
 
-# Add left-side logos
-logo_ugr_label = tk.Label(logo_frame_left, image=logo_ugr_tk)
-logo_ugr_label.pack(side=tk.LEFT, padx=5)
-logo_etsiccp_label = tk.Label(logo_frame_left, image=logo_etsiccp_tk)
-logo_etsiccp_label.pack(side=tk.LEFT, padx=5)
+    # Add left-side logos
+    logo_ugr_label = tk.Label(logo_frame_left, image=logo_ugr_tk)
+    logo_ugr_label.pack(side=tk.LEFT, padx=5)
+    logo_etsiccp_label = tk.Label(logo_frame_left, image=logo_etsiccp_tk)
+    logo_etsiccp_label.pack(side=tk.LEFT, padx=5)
 
-# Add right-side logos
-logo_grupo_puentes_label = tk.Label(logo_frame_right, image=logo_grupo_puentes_tk)
-logo_grupo_puentes_label.pack(side=tk.LEFT, padx=5)
+    # Add right-side logos
+    logo_grupo_puentes_label = tk.Label(logo_frame_right, image=logo_grupo_puentes_tk)
+    logo_grupo_puentes_label.pack(side=tk.LEFT, padx=5)
+except:
+    print("[ERROR] No se pudo cargar una o más imágenes de los logos.")
 
 # 2. MAIN GRAPHS (Matplotlib)
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 6))
@@ -191,8 +208,8 @@ def close_app():
 
 root.protocol("WM_DELETE_WINDOW", close_app)
 
-# Start Arduino connection in a separate thread
-threading.Thread(target=connect_arduino, daemon=True).start()
+# Start Arduino reading in a separate thread
+threading.Thread(target=read_arduino_data, daemon=True).start()
 
 # Run Tkinter main loop
 try:

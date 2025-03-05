@@ -31,26 +31,6 @@ The data read is the following:
 2. Update the graphs with the latest data.
 """
 
-# Variables for GUI configuration
-refresh_time = 1000  # ms [same as Arduino readings]
-GUI_title = "Fase Provincial - II Concurso Nacional de Puentes Agustín de Betancourt - ETSICCP GRANADA"
-logo_folder = "logos"
-logo_ugr_name = "ugr.png"
-logo_etsiccp_name = "etsiccp.png"
-logo_grupo_puentes_name = "grupo_puentes.png"
-arduino_port = "COM12"
-baud_rate = 9600
-
-# Sensor Data
-time_data = []
-data_mass = []
-data_deflections = []
-pause = False  # Variable to track if data updates are paused
-ser = None  # Serial connection
-
-# Create a global Queue to store incoming serial data
-data_queue = queue.Queue()
-
 def from_bits_to_deflection(bits):
     """
     Function Duties:
@@ -147,29 +127,37 @@ def from_t_ms_to_s(t_ms):
     return t_ms / 1000
 
 
-def connect_arduino():
-    """Function to establish serial connection"""
-    global ser
+def connect_arduino(port, baud_rate):
+    """
+    Function Duties:
+        Establish a serial connection and return the Serial object.
+    Input: (check .ino file to see the port and baud rate)
+        port: COM port where the Arduino is connected
+        baud_rate: communication speed (e.g. 9600)
+    Output:
+        ser: Serial object or None if the connection fails
+    """
     try:
-        ser = serial.Serial(arduino_port, baud_rate, timeout=1)
-        print(f"[INFO] Conectado a {arduino_port}")
+        ser = serial.Serial(port, baud_rate, timeout=1)
+        print(f"[INFO] Conectado a {port}")
         time.sleep(2)  # Wait for Arduino to be ready
+        return ser
     except serial.SerialException:
-        print(f"[ERROR] No se pudo abrir el puerto {arduino_port}")
-        ser = None  # No active connection
+        print(f"[ERROR] No se pudo abrir el puerto {port}")
+        return None  # No active connection
 
 
-def read_arduino_data():
-    """Continuously reads data from Arduino and stores it in a queue."""
-    global ser
-
+def read_arduino_data(ser, data_queue) -> None:
+    """
+    Function Duties:
+        Continuously reads data from Arduino and stores it in a queue.
+    Input:
+        ser: Serial object
+        data_queue: Queue to store the data
+    Output:
+        None
+    """
     while True:
-        if ser is None or not ser.is_open:
-            print("[WARNING] Conexión perdida. Intentando reconectar...")
-            connect_arduino()
-            time.sleep(1)
-            continue  # Retry connection
-
         if ser.in_waiting > 0:  # Check if data is available
             try:
                 data = ser.readline().decode('utf-8').strip()
@@ -221,7 +209,7 @@ def update_graph(frame):
     ax1.clear()
     ax1.plot(time_data[-n_readings:], data_mass[-n_readings:],
              label="Célula de carga", color="blue")
-    ax1.set_title("Carga aplicada")
+    ax1.set_title("Carga Aplicada")
     ax1.set_xlabel("Tiempo (s)")
     ax1.set_ylabel("Masa (kg)")
     ax1.legend(loc="lower left")
@@ -231,7 +219,7 @@ def update_graph(frame):
     ax2.clear()
     ax2.plot(time_data[-n_readings:], data_deflections[-n_readings:],
              label="Potenciómetro", color="red")
-    ax2.set_title("Medida de deformación en centro de vano")
+    ax2.set_title("Flecha en Centro de Vano")
     ax2.set_xlabel("Tiempo (s)")
     ax2.set_ylabel("Flecha (mm)")
     ax2.set_ylim([0, max(data_deflections) + 5])
@@ -241,28 +229,93 @@ def update_graph(frame):
         delta_t = datetime.datetime.now().timestamp() - last_timestamp
         last_timestamp = datetime.datetime.now().timestamp()
         print(
-            f"Tiempo: {t:.0f} | Peso (HX711): {mass:.3f} kg | Voltaje (Potenciómetro): {deflection:.3f} mm | Δt: {delta_t:.4f} s")
+            f"Tiempo: {t:.4f} s| Peso (HX711): {mass:.3f} kg | Voltaje (Potenciómetro): {deflection:.3f} mm | Δt: {delta_t:.4f} s")
 
-    fig.tight_layout()
+    fig_left.tight_layout()
 
 
-def close_app():
-    """Handle GUI closing and KeyboardInterrupt"""
+
+def close_app(ser):
+    """
+    Function Duties:
+        Handle GUI closing and KeyboardInterrupt
+    Input:
+        ser: Serial object (from connect_arduino)
+    """
     print("\n[INFO] Closing application...")
-    ani.event_source.stop()
-    if ser:
+
+    # Stop Matplotlib animation (check if ani exists)
+    if 'ani' in globals():
+        ani.event_source.stop()
+
+    # Close Serial Connection
+    if ser is not None and ser.is_open:
+        print("[INFO] Closing serial connection...")
         ser.close()
+
+    # Clear the queue
+    with data_queue.mutex:
+        data_queue.queue.clear()
+
     root.quit()
     root.destroy()
 
 
-def toggle_pause():
-    """Function to toggle pause/display"""
-    global pause
+
+def toggle_pause(pause):
+    """
+    Function Duties:
+        Function to toggle pause/display
+    Input:
+        pause: boolean to toggle pause
+    """
     pause = not pause  # Toggle state
     # Change button text
     pause_button.config(text="Display" if pause else "Pause")
+    return pause
 
+
+def update_pause_state():
+    global pause
+    pause = toggle_pause(pause)  # Store updated value
+
+
+# -----------------------------------------------------------------------------
+
+# MAIN
+# Variables for GUI configuration
+refresh_time = 1000  # ms [same as Arduino readings]
+GUI_title = "Fase Provincial - II Concurso Nacional de Puentes Agustín de Betancourt - ETSICCP GRANADA"
+logo_folder = "logos"
+logo_ugr_name = "ugr.png"
+logo_etsiccp_name = "etsiccp.png"
+logo_grupo_puentes_name = "grupo_puentes.png"
+arduino_port = "COM12"
+baud_rate = 9600
+
+# Sensor Data
+time_data = []
+data_mass = []
+data_deflections = []
+pause = False  # Variable to track if data updates are paused
+ser = None  # Serial connection
+
+# Create a global Queue to store incoming serial data
+data_queue = queue.Queue()
+ser = connect_arduino(arduino_port, baud_rate)
+run_arduino_thread = False
+if ser is None or not ser.is_open:  # Check connection before starting thread
+    print("[WARNING] No active serial connection. Attempting to reconnect...")
+    ser = connect_arduino(arduino_port, baud_rate)
+    if ser is None:
+        print("[ERROR] Unable to establish connection. Data thread will NOT start.")
+    else:
+        run_arduino_thread = True
+else:
+    run_arduino_thread = True
+
+if run_arduino_thread:
+    threading.Thread(target=read_arduino_data, args=(ser, data_queue), daemon=True).start()
 
 # Tkinter GUI Setup
 root = tk.Tk()
@@ -320,10 +373,32 @@ try:
 except:
     print("[ERROR] No se pudo cargar una o más imágenes de los logos.")
 
-# 2. MAIN GRAPHS (Matplotlib)
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 6))
-canvas = FigureCanvasTkAgg(fig, master=root)
-canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
+# # 2. MAIN GRAPHS (Matplotlib)
+# fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 6))
+# canvas = FigureCanvasTkAgg(fig, master=root)
+# canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
+
+# MAIN CONTAINER (Splitting Left & Right Sections)
+main_container = tk.Frame(root)
+main_container.grid(row=1, column=0, sticky="nsew")
+root.grid_rowconfigure(1, weight=1)
+root.grid_columnconfigure(0, weight=1)
+
+# LEFT SIDE: Original 2 Subplots (Mass & Deflection)
+fig_left, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
+canvas_left = FigureCanvasTkAgg(fig_left, master=main_container)
+canvas_left.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+# RIGHT SIDE: New Single Plot (ax3)
+fig_right, ax3 = plt.subplots(figsize=(8, 6))  # Single plot on the right
+canvas_right = FigureCanvasTkAgg(fig_right, master=main_container)
+canvas_right.get_tk_widget().grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+
+# Make both sides expand properly
+main_container.grid_columnconfigure(0, weight=1)
+main_container.grid_columnconfigure(1, weight=1)
+main_container.grid_rowconfigure(0, weight=1)
+
 
 # 3. BOTTOM BUTTONS (Start Measurement & Pause Button)
 bottom_container = tk.Frame(root)
@@ -335,26 +410,26 @@ start_button = ttk.Button(bottom_container, text="Start Measurement")
 start_button.pack(side=tk.LEFT, padx=10)  # Positioned on the left
 
 # Pause Button (Right Side)
-pause_button = ttk.Button(bottom_container, text="Pause", command=toggle_pause)
+pause_button = ttk.Button(
+    bottom_container,
+    text="Pause",
+    command=lambda: update_pause_state()
+)
 pause_button.pack(side=tk.RIGHT, padx=10)
 
 # Run Matplotlib animation
 last_time = datetime.datetime.now()
 last_timestamp = last_time.timestamp()  # Convert to timestamp
-ani = FuncAnimation(fig, update_graph, interval=refresh_time,
+ani = FuncAnimation(fig_left, update_graph, interval=refresh_time,
                     cache_frame_data=False)
 
+# Start Arduino reading in a separate thread and pass the queue
+root.protocol("WM_DELETE_WINDOW", lambda: close_app(ser))
 
-#
-
-
-root.protocol("WM_DELETE_WINDOW", close_app)
-
-# Start Arduino reading in a separate thread
-threading.Thread(target=read_arduino_data, daemon=True).start()
+# threading.Thread(target=read_arduino_data, args=(ser, data_queue), daemon=True).start()
 
 # Run Tkinter main loop
 try:
     root.mainloop()
 except KeyboardInterrupt:
-    close_app()
+    close_app(ser)

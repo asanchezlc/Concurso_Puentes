@@ -29,6 +29,15 @@ The data read is the following:
 - Voltage (V)
 
 2. Update the graphs with the latest data.
+
+
+
+IMPORTANT NOTES ABOUT CODE ARCHITECTURE:
+    - The data acquisition is done in a separate thread to avoid blocking the GUI.
+    - The data is stored in a queue to ensure thread safety and fast plot updating.
+    - The variables data_time, data_mass, and data_deflections are global and updated
+      by the process_data function.
+
 """
 
 def from_bits_to_deflection(bits):
@@ -147,7 +156,7 @@ def connect_arduino(port, baud_rate):
         return None  # No active connection
 
 
-def read_arduino_data(ser, data_queue) -> None:
+def read_arduino_data_thread(ser, data_queue) -> None:
     """
     Function Duties:
         Continuously reads data from Arduino and stores it in a queue.
@@ -155,7 +164,7 @@ def read_arduino_data(ser, data_queue) -> None:
         ser: Serial object
         data_queue: Queue to store the data
     Output:
-        None
+        None (it will be in a thread)
     """
     while True:
         if ser.in_waiting > 0:  # Check if data is available
@@ -171,68 +180,54 @@ def read_arduino_data(ser, data_queue) -> None:
                 continue  # Skip bad data
 
 
-def update_graph(frame):
-    """Function to update the graphs"""
-    global time_data, data_mass, data_deflections, pause, last_timestamp
-
-    if pause or ser is None:  # If paused or no serial connection, do not update
-        return
-
-    # Retrieve the latest available data from the queue
-    if len(time_data) > 0:
-        t = time_data[-1]
-    else:
-        t = 0
-    while not data_queue.empty():
-        delta_t, bits_hx711, bits_potentiometer = data_queue.get()
-        delta_t = from_t_ms_to_s(delta_t)
-        mass = from_bits_to_kg(bits_hx711)
-        deflection = from_bits_to_deflection(bits_potentiometer)
-        t = delta_t + t
-        time_data.append(t)
-        data_mass.append(mass)
-        data_deflections.append(deflection)
-    else:
-        if len(time_data) > 0:
-            # print("[WARNING] No se pudo leer datos, reutilizando último valor.")
-            t, mass, deflection = time_data[-1], data_mass[-1], data_deflections[-1]
-        else:  # First measurement
-            t, mass, deflection = 0, 0, 0  # Default values if no previous data
-
-        time_data.append(t)
-        data_mass.append(mass)
-        data_deflections.append(deflection)
-
+def update_graph(frame, fig, ax1, ax2, data_queue, data_time, data_mass,
+                 data_deflections, pause,
+                 n_readings=200):
+    """
+    Function Duties:
+        Updates the mass and deflection graph (which is a single figure with 2 axes)
+        full list of values data_time, data_mass, data_deflections
+    Inputs:
+        - frame: Required for FuncAnimation (unused inside the function)
+        - fig: The Matplotlib figure object to update
+        - ax1: First subplot (Mass vs Time)
+        - ax2: Second subplot (Deflection vs Time)
+        - data_time: List storing time values
+        - data_mass: List storing mass readings
+        - data_deflections: List storing deflection readings
+        - pause: Boolean indicating whether updates are paused
+        - n_readings: Number of readings to display
+    """
     n_readings = 200
+    if pause:
+        return  # If paused, do not update
+
+    process_data(data_queue, data_time, data_mass, data_deflections)
 
     # Update first graph
     ax1.clear()
-    ax1.plot(time_data[-n_readings:], data_mass[-n_readings:],
-             label="Célula de carga", color="blue")
+    ax1.plot(data_time[-n_readings:], data_mass[-n_readings:], label="Célula de carga", color="blue")
     ax1.set_title("Carga Aplicada")
     ax1.set_xlabel("Tiempo (s)")
     ax1.set_ylabel("Masa (kg)")
     ax1.legend(loc="lower left")
-    ax1.set_ylim([0, max(data_mass) + 5])
+    ax1.set_ylim([-1, max(data_mass) + 5])
 
     # Update second graph
     ax2.clear()
-    ax2.plot(time_data[-n_readings:], data_deflections[-n_readings:],
-             label="Potenciómetro", color="red")
+    ax2.plot(data_time[-n_readings:], data_deflections[-n_readings:], label="Potenciómetro", color="red")
     ax2.set_title("Flecha en Centro de Vano")
     ax2.set_xlabel("Tiempo (s)")
     ax2.set_ylabel("Flecha (mm)")
-    ax2.set_ylim([0, max(data_deflections) + 5])
+    ax2.set_ylim([-150, max(data_deflections) + 5])
     ax2.legend(loc="lower left")
 
-    if not (mass is None and deflection is None):
-        delta_t = datetime.datetime.now().timestamp() - last_timestamp
-        last_timestamp = datetime.datetime.now().timestamp()
-        print(
-            f"Tiempo: {t:.4f} s| Peso (HX711): {mass:.3f} kg | Voltaje (Potenciómetro): {deflection:.3f} mm | Δt: {delta_t:.4f} s")
+    # if mass is not None and deflection is not None:
+    #     delta_t = datetime.datetime.now().timestamp() - last_timestamp
+    #     last_timestamp = datetime.datetime.now().timestamp()
+    print(f"Tiempo: {data_time[-1]:.4f} s | Peso (HX711): {data_mass[-1]:.3f} kg | Flecha: {data_deflections[-1]:.3f} mm")
 
-    fig_left.tight_layout()
-
+    fig.tight_layout()  # Adjust layout for clarity
 
 
 def close_app(ser):
@@ -261,7 +256,6 @@ def close_app(ser):
     root.destroy()
 
 
-
 def toggle_pause(pause):
     """
     Function Duties:
@@ -280,6 +274,46 @@ def update_pause_state():
     pause = toggle_pause(pause)  # Store updated value
 
 
+def process_data(data_queue, data_time, data_mass, data_deflections) -> None:
+    """
+    Function Duties:
+        Retrieves and processes the latest available data from the queue.
+    Inputs:
+        - data_queue: Queue storing incoming sensor data
+        - data_time: List storing time values
+        - data_mass: List storing mass readings
+        - data_deflections: List storing deflection readings
+    Output:
+        None
+        They are global variables that get updated, no need to return them
+    """
+
+    latest_t = data_time[-1] if data_time else 0  # Last time value or 0 if empty
+
+    while not data_queue.empty():
+        delta_t, bits_hx711, bits_potentiometer = data_queue.get()
+        delta_t = from_t_ms_to_s(delta_t)
+        mass = from_bits_to_kg(bits_hx711)
+        deflection = from_bits_to_deflection(bits_potentiometer)
+        latest_t += delta_t
+        with lock:  # Avoid problems with different threads managing the same variables
+            data_time.append(latest_t)
+            data_mass.append(mass)
+            data_deflections.append(deflection)
+    else:
+        if len(data_time) > 0:
+            # print("[WARNING] No se pudo leer datos, reutilizando último valor.")
+            t, mass, deflection = data_time[-1], data_mass[-1], data_deflections[-1]
+        else:  # First measurement
+            t, mass, deflection = 0, 0, 0  # Default values if no previous data
+
+        data_time.append(t)
+        data_mass.append(mass)
+        data_deflections.append(deflection)
+
+
+
+
 # -----------------------------------------------------------------------------
 
 # MAIN
@@ -294,14 +328,12 @@ arduino_port = "COM12"
 baud_rate = 9600
 
 # Sensor Data
-time_data = []
-data_mass = []
-data_deflections = []
+data_time, data_mass, data_deflections = [0], [0], [0]  # Starting values
 pause = False  # Variable to track if data updates are paused
 ser = None  # Serial connection
 
 # Create a global Queue to store incoming serial data
-data_queue = queue.Queue()
+
 ser = connect_arduino(arduino_port, baud_rate)
 run_arduino_thread = False
 if ser is None or not ser.is_open:  # Check connection before starting thread
@@ -315,7 +347,11 @@ else:
     run_arduino_thread = True
 
 if run_arduino_thread:
-    threading.Thread(target=read_arduino_data, args=(ser, data_queue), daemon=True).start()
+    lock = threading.Lock()  # it avoids problems with different threads managing the same variables
+    data_queue = queue.Queue()
+    threading.Thread(target=read_arduino_data_thread, args=(ser, data_queue), daemon=True).start()
+
+
 
 # Tkinter GUI Setup
 root = tk.Tk()
@@ -420,13 +456,18 @@ pause_button.pack(side=tk.RIGHT, padx=10)
 # Run Matplotlib animation
 last_time = datetime.datetime.now()
 last_timestamp = last_time.timestamp()  # Convert to timestamp
-ani = FuncAnimation(fig_left, update_graph, interval=refresh_time,
-                    cache_frame_data=False)
+ani = FuncAnimation(
+    fig_left,
+    lambda frame: update_graph(frame, fig_left, ax1, ax2, data_queue, data_time, data_mass, data_deflections, pause, last_timestamp),
+    interval=refresh_time,
+    cache_frame_data=False
+)
 
-# Start Arduino reading in a separate thread and pass the queue
+
+
 root.protocol("WM_DELETE_WINDOW", lambda: close_app(ser))
 
-# threading.Thread(target=read_arduino_data, args=(ser, data_queue), daemon=True).start()
+
 
 # Run Tkinter main loop
 try:

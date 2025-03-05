@@ -325,11 +325,16 @@ fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 6))
 canvas = FigureCanvasTkAgg(fig, master=root)
 canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
 
-# 3. BOTTOM BUTTON (Pause Button)
+# 3. BOTTOM BUTTONS (Start Measurement & Pause Button)
 bottom_container = tk.Frame(root)
 bottom_container.grid(row=2, column=0, sticky="sew", padx=10, pady=5)
 root.grid_rowconfigure(2, weight=0)
 
+# Start Measurement Button (Left Side)
+start_button = ttk.Button(bottom_container, text="Start Measurement")
+start_button.pack(side=tk.LEFT, padx=10)  # Positioned on the left
+
+# Pause Button (Right Side)
 pause_button = ttk.Button(bottom_container, text="Pause", command=toggle_pause)
 pause_button.pack(side=tk.RIGHT, padx=10)
 

@@ -67,7 +67,7 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
 
     if len(callibration_dict) > 0:
         i = list(callibration_dict.keys())[-1]
-        idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"]
+        idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"] + 1
     else:
         idx_ini = 0
     # idx_ini += 1
@@ -80,7 +80,11 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
     ax1.set_xlabel("Tiempo (s)")
     ax1.set_ylabel("Masa (kg)")
     ax1.legend(loc="lower left")
-    ax1.set_ylim([min(processed_mass[idx_ini:])-2, max(processed_mass[idx_ini:]) + 50])
+    if len(processed_mass[idx_ini:]) > 0:
+        y_inf, y_max = min(processed_mass[idx_ini:])-2, max(processed_mass[idx_ini:]) + 50
+    else:
+        y_inf, y_max = -2, 50
+    ax1.set_ylim([y_inf, y_max])
 
     # Update second graph
     ax2.clear()
@@ -89,7 +93,11 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
     ax2.set_title("Flecha en Centro de Vano")
     ax2.set_xlabel("Tiempo (s)")
     ax2.set_ylabel("Flecha (mm)")
-    ax2.set_ylim([min(processed_deflection[idx_ini:])-5, max(processed_deflection[idx_ini:]) + 5])
+    if len(processed_deflection[idx_ini:]) > 0:
+        y_inf, y_max = min(processed_deflection[idx_ini:])-5, max(processed_deflection[idx_ini:]) + 5
+    else:
+        y_inf, y_max = -5, 5
+    ax1.set_ylim([y_inf, y_max])
     ax2.legend(loc="lower left")
 
     print(f"Time: {raw_time[-1]:.2f} s | Raw mass: {raw_mass[-1]:.3f} kg | Raw Deflection: {raw_deflection[-1]:.3f} mm | Processed Mass: {processed_mass[-1]:.3f} kg | Processed Deflection: {processed_deflection[-1]:.3f} mm")
@@ -124,7 +132,7 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
 
     if len(callibration_dict) > 0:
         i = list(callibration_dict.keys())[-1]
-        idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"]
+        idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"] + 1
     else:
         idx_ini = 0
     # idx_ini += 1
@@ -245,6 +253,12 @@ def update_pause_state():
     pause = toggle_pause(pause)  # Store updated value
 
 
+def save_team_name():
+    global team_label
+    team_label = team_entry.get()
+    print(f"[INFO] Team Name Updated: {team_label}")  # Debugging info
+
+
 def toggle_measurement():
     """
     Function Duties:
@@ -271,7 +285,7 @@ def toggle_measurement():
 
 
 def save_backup_data_thread(callibration_dict):
-    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection, measurement_running
+    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection, measurement_running, team_label
 
     while True:
         if measurement_running:
@@ -292,7 +306,7 @@ def save_backup_data_thread(callibration_dict):
             }
 
             # Save data to a JSON file
-            file_name = f"data_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+            file_name = f"{team_label}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
             with open(os.path.join(folder, file_name), "w") as f:
                 json.dump(data_dict, f, indent=4)
         else:
@@ -300,7 +314,7 @@ def save_backup_data_thread(callibration_dict):
 
 
 def save_data_to_file(callibration_dict):
-    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection
+    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection, team_label
 
     folder = os.path.join("data")
     os.makedirs(folder, exist_ok=True)
@@ -318,7 +332,7 @@ def save_data_to_file(callibration_dict):
     }
 
     # Save data to a JSON file
-    file_name = f"data_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    file_name = f"{team_label}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
     with open(os.path.join(folder, file_name), "w") as f:
         json.dump(data_dict, f, indent=4)
 
@@ -508,7 +522,7 @@ main_container.grid_rowconfigure(0, weight=1)
 
 
 
-# 3. BOTTOM BUTTONS (Start Measurement & Pause Button)
+# 3. BOTTOM BUTTONS (Start Measurement, Text Entry, and Pause Button)
 bottom_container = tk.Frame(root)
 bottom_container.grid(row=2, column=0, sticky="sew", padx=10, pady=5)
 root.grid_rowconfigure(2, weight=0)
@@ -517,6 +531,16 @@ root.grid_rowconfigure(2, weight=0)
 start_button = ttk.Button(bottom_container, text="Start Measurement", command=toggle_measurement, style="Primary.TButton")
 start_button.pack(side=tk.LEFT, padx=10)
 
+# Center Text Entry (Team Name)
+team_label = "Equipo_1"  # Default team name
+team_entry = ttk.Entry(bottom_container, width=20)  # Input box
+team_entry.insert(0, team_label)  # Default text
+team_entry.pack(side=tk.LEFT, padx=5)
+
+# Save Button (Next to Text Entry)
+save_button = ttk.Button(bottom_container, text="Save", command=save_team_name, style="Secondary.TButton")
+save_button.pack(side=tk.LEFT, padx=5)
+
 # Pause Button (Right Side)
 pause_button = ttk.Button(
     bottom_container,
@@ -524,6 +548,7 @@ pause_button = ttk.Button(
     command=lambda: update_pause_state()
 )
 pause_button.pack(side=tk.RIGHT, padx=10)
+
 
 # Run Matplotlib animation
 ani_1 = FuncAnimation(

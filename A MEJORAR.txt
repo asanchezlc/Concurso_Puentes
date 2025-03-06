@@ -1,0 +1,13 @@
+Guardar csv
+Aclarar variables locales y globales
+Please wait no se muestra
+
+Pensar si la shunt resistor afecta o no a la intensidad saliente
+
+
+ENRIQUE:
+- Comentar pesada
+- Mandar códigos del concurso
+- Verde y fondo negro
+- Filtrado de picos y promediado
+- Pintar desde start_measurement

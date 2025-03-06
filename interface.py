@@ -6,7 +6,6 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image, ImageTk  # Import Pillow for image handling
 import os
-import serial
 import json
 import threading
 import time
@@ -16,6 +15,8 @@ import queue
 import copy
 
 import helpers.outils as outils
+
+import numpy as np
 """
 File Duties:
 
@@ -42,7 +43,8 @@ IMPORTANT NOTES ABOUT CODE ARCHITECTURE:
 """
 
 def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw_mass,
-                 raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration):
+                 raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection,
+                 pause, callibration, threshold_mass_peaks, smooth_plots, step_smooth):
     """
     Function Duties:
         Updates the mass and deflection graph (which is a single figure with 2 axes)
@@ -63,7 +65,7 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
         return  # If paused, do not update
 
     process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
-                 processed_deflection)
+                 processed_deflection, threshold_mass_peaks)
 
     if len(callibration_dict) > 0:
         i = list(callibration_dict.keys())[-1]
@@ -72,32 +74,53 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
         idx_ini = 0
     # idx_ini += 1
 
+    # Lists for plotting
+    t_plot = raw_time[idx_ini:]
+    mass_plot = processed_mass[idx_ini:]
+    deflection_plot = processed_deflection[idx_ini:]
+
+    # Manual filter for mass
+    valid_indices = outils.manual_find_peaks(mass_plot, threshold_mass_peaks)
+    t_plot = [t_plot[i] for i in valid_indices]
+    mass_plot = [mass_plot[i] for i in valid_indices]
+    deflection_plot = [deflection_plot[i] for i in valid_indices]
+
+    # Smooth data
+    if smooth_plots:
+        t_plot = outils.smooth_with_edges(t_plot, step_smooth)
+        mass_plot = outils.smooth_with_edges(mass_plot, step_smooth)
+        deflection_plot = outils.smooth_with_edges(deflection_plot, step_smooth)
+        if len(t_plot) > step_smooth:
+            t_plot = t_plot[step_smooth:]
+            mass_plot = mass_plot[step_smooth:]
+            deflection_plot = deflection_plot[step_smooth:]
+
     # Update first graph
     ax1.clear()
-    ax1.plot(raw_time[idx_ini:], processed_mass[idx_ini:], label="Célula de carga", color="blue")
+    ax1.plot(t_plot, mass_plot, label="Célula de carga", color="blue")
     # ax1.plot(raw_time[-n_readings:], processed_mass[-n_readings:], label="Célula de carga", color="blue")
     ax1.set_title("Carga Aplicada")
     ax1.set_xlabel("Tiempo (s)")
     ax1.set_ylabel("Masa (kg)")
-    ax1.legend(loc="lower left")
-    if len(processed_mass[idx_ini:]) > 0:
-        y_inf, y_max = min(processed_mass[idx_ini:])-2, max(processed_mass[idx_ini:]) + 50
+    if len(mass_plot) > 0:
+        y_inf, y_max = min(min(mass_plot), -2), max(mass_plot) + 50
     else:
-        y_inf, y_max = -2, 50
+        y_inf, y_max = -2, 500
     ax1.set_ylim([y_inf, y_max])
+    ax1.legend(loc="lower left")
 
     # Update second graph
     ax2.clear()
-    ax2.plot(raw_time[idx_ini:], processed_deflection[idx_ini:], label="Potenciómetro", color="red")
+    ax2.plot(t_plot, deflection_plot, label="Potenciómetro", color="red")
     # ax2.plot(raw_time[-n_readings:], processed_deflection[-n_readings:], label="Potenciómetro", color="red")
     ax2.set_title("Flecha en Centro de Vano")
     ax2.set_xlabel("Tiempo (s)")
     ax2.set_ylabel("Flecha (mm)")
-    if len(processed_deflection[idx_ini:]) > 0:
-        y_inf, y_max = min(processed_deflection[idx_ini:])-5, max(processed_deflection[idx_ini:]) + 5
+    if len(deflection_plot) > 0:
+        y_inf, y_max = min(min(deflection_plot), -5), max(deflection_plot) + 5
     else:
         y_inf, y_max = -5, 5
-    ax1.set_ylim([y_inf, y_max])
+    ax2.set_ylim([y_inf, y_max])
     ax2.legend(loc="lower left")
 
     print(f"Time: {raw_time[-1]:.2f} s | Raw mass: {raw_mass[-1]:.3f} kg | Raw Deflection: {raw_deflection[-1]:.3f} mm | Processed Mass: {processed_mass[-1]:.3f} kg | Processed Deflection: {processed_deflection[-1]:.3f} mm")
@@ -107,7 +130,7 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
 
 def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
                            raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection,
-                           pause, callibration):
+                           pause, callibration, threshold_mass_peaks, smooth_plots, step_smooth):
     """
     Function Duties:
         Updates the mass and deflection graph (which is a single figure with 2 axes)
@@ -128,7 +151,7 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
         return  # If paused, do not update
 
     process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
-                 processed_deflection)
+                 processed_deflection, threshold_mass_peaks)
 
     if len(callibration_dict) > 0:
         i = list(callibration_dict.keys())[-1]
@@ -137,18 +160,28 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
         idx_ini = 0
     # idx_ini += 1
     # stiffness = [m/d if d != 0 else 0 for m, d in zip(processed_mass, processed_deflection)]
+    mass_plot = processed_mass[idx_ini:]
+    deflection_plot = processed_deflection[idx_ini:]
+
+    if smooth_plots:
+        mass_plot = outils.smooth_with_edges(mass_plot, step_smooth)
+        deflection_plot = outils.smooth_with_edges(deflection_plot, step_smooth)
+        if len(t_plot) > step_smooth:
+            t_plot = t_plot[step_smooth:]
+            mass_plot = mass_plot[step_smooth:]
+            deflection_plot = deflection_plot[step_smooth:]
 
     # Update first graph
     ax.clear()
-    ax.scatter(processed_deflection[idx_ini:], processed_mass[idx_ini:], label="Rigidez", color="black")
-    ax.set_title(f"Flecha vs Carga; Máx. Carga: {format(max(processed_mass[1:]), '.2f')}kg; Máx. Flecha: {format(max(processed_deflection[1:]), '.2f')}mm")
+    ax.scatter(deflection_plot, mass_plot, label="Rigidez", color="black")
+    ax.set_title(f"Flecha vs Carga")
     ax.set_xlabel("Flecha (mm)")
     ax.set_ylabel("Carga (kg)")
     ax.legend(loc="lower right")
     x_inf = 0
-    x_max = max(processed_deflection[idx_ini:] + [100])
+    x_max = max(deflection_plot + [100])
     y_inf = 0
-    y_max = max(processed_mass[idx_ini:] + [500])
+    y_max = max(mass_plot + [500])
     ax.set_xlim([x_inf, x_max])
     ax.set_ylim([y_inf, y_max])
     # ax.set_ylim([-1, max(stiffness) + 5])
@@ -158,7 +191,7 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
 
 
 def process_data(data_queue, raw_time, raw_mass, raw_deflection,
-                 processed_mass, processed_deflection) -> None:
+                 processed_mass, processed_deflection, threshold_mass_peaks) -> None:
     """
     Function Duties:
         Retrieves and processes the latest available data from the queue.
@@ -191,6 +224,10 @@ def process_data(data_queue, raw_time, raw_mass, raw_deflection,
         processed_mass += [m - zero_mass for m in queue_mass]
         processed_deflection += [d - zero_deflection for d in queue_deflection]
     if callibration:
+        # Remove outliers from callibration
+        valid_indices = outils.manual_find_peaks(queue_mass, threshold_mass_peaks)
+        queue_mass = [queue_mass[i] for i in valid_indices]
+        queue_deflection = [queue_deflection[i] for i in valid_indices]
         zero_mass = sum(queue_mass) / len(queue_mass)
         zero_deflection = sum(queue_deflection) / len(queue_deflection)
         callibration_time = queue_time[-1] - queue_time[0]
@@ -337,7 +374,32 @@ def save_data_to_file(callibration_dict):
         json.dump(data_dict, f, indent=4)
 
 
-# def start_measurement(raw_time, raw_mass, raw_deflection):
+def update_measurement_info():
+    """
+    Function to update the measurement info panel in real time.
+    """
+    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection
+    process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
+                 processed_deflection, threshold_mass_peaks)
+
+    if len(callibration_dict) > 0:
+        i = list(callibration_dict.keys())[-1]
+        idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"] + 1
+    else:
+        idx_ini = 0
+
+    if len(processed_mass[idx_ini:]) > 0:
+        max_mass = max(processed_mass[idx_ini:])
+        max_deflection = max(processed_deflection[idx_ini:])
+    else:
+        max_mass, max_deflection = 0, 0
+
+    # Update the label text
+    text_label.config(text=f"CARGA MÁX.: {max_mass:.2f} kg        FLECHA MÁX.: {max_deflection:.2f} mm")
+
+    # Schedule the next update (every 1 second)
+    text_label.after(1000, update_measurement_info)
+
 
 
 def callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, zero_deflection):
@@ -351,7 +413,7 @@ def callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, ze
     t_ini = raw_time[idx_ini]
     time.sleep(callibration_time)
     process_data(data_queue, raw_time, raw_mass, raw_deflection,
-                 processed_mass, processed_deflection)
+                 processed_mass, processed_deflection, threshold_mass_peaks)
     t_end = t_ini + callibration_time  # callibration_time is updated in process_data
     callibration = False
     pause = False
@@ -376,14 +438,18 @@ def callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, ze
 
 # MAIN
 # Variables for GUI configuration
-refresh_time = 1000  # ms [same as Arduino readings]
+refresh_time = 1000  # ms
+arduino_port = "COM12"
+baud_rate = 9600
+smooth_plots = True
+step_smooth = 3  # Number of points to smooth (before and after)
+threshold_mass_peaks = 50  # kg
+simulated = True
 GUI_title = "Fase Provincial - II Concurso Nacional de Puentes Agustín de Betancourt - ETSICCP GRANADA"
 logo_folder = "logos"
 logo_ugr_name = "ugr.png"
 logo_etsiccp_name = "etsiccp.png"
 logo_grupo_puentes_name = "grupo_puentes.png"
-arduino_port = "COM12"
-baud_rate = 9600
 
 # Sensor Data
 raw_time, raw_mass, raw_deflection = [0], [0], [0]  # Starting values
@@ -395,8 +461,6 @@ callibration_dict = {}
 measurement_running = False
 ser = None  # Serial connection
 
-# Create a global Queue to store incoming serial data
-simulated = True
 if simulated:
     lock = threading.Lock()
     data_queue = queue.Queue()
@@ -498,12 +562,16 @@ canvas_left.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 right_container = tk.Frame(main_container)
 right_container.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
-# RIGHT-TOP: Small Text Area
-text_frame = tk.Frame(right_container, height=50, bg="lightgray")
+# RIGHT-TOP: Measurement Info Panel (Small Text Area)
+text_frame = tk.Frame(right_container, height=50, bg="black")  # Black background
 text_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=0)
 text_frame.grid_propagate(False)  # Prevent resizing
-text_label = ttk.Label(text_frame, text="Measurement Info", font=("Arial", 14, "bold"))
+
+# Use tk.Label instead of ttk.Label to allow background color changes
+text_label = tk.Label(text_frame, text="Measurement Info", font=("Arial", 18, "bold"),
+                      fg="lime", bg="black")  # Green text, black background
 text_label.pack(expand=True)
+
 
 # RIGHT-BOTTOM: Stiffness Plot (Larger Area)
 fig_right, ax3 = plt.subplots(figsize=(8, 4))  # Single plot on the right
@@ -512,15 +580,13 @@ canvas_right.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=5, pady=0
 
 # Make Right Side Expand Properly (More Height for Plot)
 right_container.grid_rowconfigure(0, weight=2)  # Text area (small)
-right_container.grid_rowconfigure(1, weight=4)  # Plot area (larger)
+right_container.grid_rowconfigure(1, weight=12)  # Plot area (larger)
 right_container.grid_columnconfigure(0, weight=1)
 
 # Make Both Sides Expand Properly
 main_container.grid_columnconfigure(0, weight=1)  # Left plot
 main_container.grid_columnconfigure(1, weight=1)  # Right section
 main_container.grid_rowconfigure(0, weight=1)
-
-
 
 # 3. BOTTOM BUTTONS (Start Measurement, Text Entry, and Pause Button)
 bottom_container = tk.Frame(root)
@@ -554,14 +620,17 @@ pause_button.pack(side=tk.RIGHT, padx=10)
 ani_1 = FuncAnimation(
     fig_left,
     lambda frame: update_mass_deflection_graph(frame, fig_left, ax1, ax2, data_queue, raw_time, raw_mass,
-                                               raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration),
+                                               raw_deflection, processed_mass, processed_deflection, zero_mass,
+                                               zero_deflection, pause, callibration, threshold_mass_peaks,
+                                               smooth_plots, step_smooth),
     interval=refresh_time,
     cache_frame_data=False
 )
 ani_2 = FuncAnimation(
     fig_right,
     lambda frame2: update_stiffness_graph(frame2, fig_right, ax3, data_queue, raw_time, raw_mass,
-                                          raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration),
+                                          raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection,
+                                          pause, callibration, threshold_mass_peaks, smooth_plots, step_smooth),
     interval=refresh_time,
     cache_frame_data=False
 )
@@ -569,6 +638,7 @@ ani_2 = FuncAnimation(
 root.protocol("WM_DELETE_WINDOW", lambda: close_app(ser))
 # Run Tkinter main loop
 try:
+    update_measurement_info()
     root.mainloop()
 except KeyboardInterrupt:
     close_app(ser)

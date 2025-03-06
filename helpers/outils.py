@@ -1,7 +1,8 @@
 
 import time
 import serial
-
+import datetime
+import numpy as np
 
 def from_bits_to_deflection(bits):
     """
@@ -158,6 +159,61 @@ def simulated_data_thread(data_queue) -> None:
     import numpy as np
     while True:
         delta_t, bits_hx711, bits_potentiometer = 50, np.random.randint(0, 2**10), np.random.randint(0, 2**6)
+        time_now = datetime.datetime.now().timestamp()
+        bits_hx711 += time_now * 100000
+        bits_potentiometer += time_now*30
+        if np.random.randint(0, 1000) == 0:  # Simulate an outlier value
+            bits_hx711 = 2**13
         data_queue.put(
             (int(delta_t), int(bits_hx711), int(bits_potentiometer)))
         time.sleep(delta_t / 1000)  # Convert ms to seconds
+
+
+def manual_find_peaks(list_values, threshold):
+    """
+    Function Duties:
+        Find peaks in a list of values using a threshold.
+    Input:
+        list_values: list of values
+        threshold: minimum difference between consecutive values
+    Output:
+        valid_indices: indices of the peaks
+    """
+    # Compute differences between consecutive elements -> get outliers
+    diff_before = np.abs(np.diff(list_values, prepend=np.nan))
+    diff_after = np.abs(np.diff(list_values, append=np.nan))
+    outliers = (diff_before > threshold) & (diff_after > threshold)
+
+    # Get indices of non-outliers
+    valid_indices = np.where(~outliers)[0]
+
+    return valid_indices
+
+
+def smooth_with_edges(data_list, step):
+    data_list = np.array(data_list, dtype=np.float64)  # Ensure float for averaging
+    n = len(data_list)
+
+    if n <= 2 * step:
+        return data_list  # If the list is too small, return as is
+
+    # Compute moving average for the middle part
+    smoothed_values = np.convolve(data_list, np.ones(step)/step, mode='valid')
+
+    # Initialize output array
+    result = np.zeros(n)
+    
+    # Compute progressive averaging for the first `step` elements
+    for i in range(step):
+        result[i] = np.mean(data_list[:i + step])  # Average available values before step
+
+    # Compute progressive averaging for the last `step` elements
+    for i in range(n - step, n):
+        result[i] = np.mean(data_list[i - step + 1:])  # Average available values after step
+
+    # Insert the moving average in the middle
+    mid_start = step
+    mid_end = n - step
+    result[mid_start:mid_end] = smoothed_values[:mid_end - mid_start]
+
+    return result

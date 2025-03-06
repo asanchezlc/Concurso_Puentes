@@ -7,6 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image, ImageTk  # Import Pillow for image handling
 import os
 import serial
+import json
 import threading
 import time
 
@@ -14,6 +15,7 @@ import datetime
 import queue
 import copy
 
+import helpers.outils as outils
 """
 File Duties:
 
@@ -31,170 +33,29 @@ The data read is the following:
 2. Update the graphs with the latest data.
 
 
-
 IMPORTANT NOTES ABOUT CODE ARCHITECTURE:
     - The data acquisition is done in a separate thread to avoid blocking the GUI.
     - The data is stored in a queue to ensure thread safety and fast plot updating.
-    - The variables data_time, data_mass, and data_deflections are global and updated
+    - The variables raw_time, raw_mass, and raw_deflection are global and updated
       by the process_data function.
 
 """
 
-def from_bits_to_deflection(bits):
-    """
-    Function Duties:
-        Converts potentiometer bits to deflection (mm)
-
-    Potentiometer:
-        It provides an output electric current ranging from I0 to If;
-        I0 corresponds to lengt=0 and If to length=L. It is powered with
-        15 V.
-        - L: 500 mm
-        - I0: 4 mA
-        - If: 20 mA
-
-    Electronic circuit (shunt resistor): with arduino we measure voltage
-        (not current) so we need to convert it to current using Ohm's Law.
-        To do so, we use a resistor which properly scales the current to
-        the Arduino voltage range (0-5V); in this case, R=240 so that
-        20mA * R = 4.8 V
-        - R: 240 Ohm
-
-    Arduino ADC:
-        The arduino analog pin has an integrated ADC which converts the
-        voltage from 0 to Vcc to a digital value from 0 to 2^n_bits - 1
-        - n_bits: 10 (Arduino ADC)
-    """
-    # Potentiometer characteristics
-    L = 500  # mm
-    I0 = 4  # mA
-    If = 20  # mA
-
-    # Shunt circuit
-    R = 240  # Ohm  (used for forming the shunt circuit)
-
-    # ADC (Arduino)
-    Vcc = 5  # V
-    n_bits = 10  # 10-bit ADC (Arduino ADC)
-    bits_max = 2**n_bits - 1  # Maximum value for 10 bits
-
-    # Deflection obtention
-    V = bits * Vcc / bits_max  # from bits to voltage
-    I = V / R  # Ohm's Law
-    deflection = (I * 1000 - I0) / (If - I0) * L  # Linear response; 1000 conversion A -> mA
-
-    return deflection  # mm
-
-
-def from_bits_to_kg(bits):
-    """
-    Function Duties:
-        Converts the bits measured by the HX711 to kg.
-
-    Load Cell:
-        It provides an output voltage ranging from 0 mV to
-        Vcc * Sensitivity (= 10 mV)
-        - Sensitivity: 2 mV/V
-        - Vcc: 5 V
-        - Max Load: 1000 kg
-
-    HX711:
-        It measures from - sensitivity_hx711 to + sensitivity_hx711
-        (e.g. +-20mV); It amplifies this signal by a gain factor. It
-        produces an output given in bits from -2^(n_bits-1) to 2^(n_bits-1) - 1
-        - n_bits: 24
-        - Gain: 128
-        - sensitivity_hx711: 20 mV
-        - inverted_sign: the connection may be inverted; if so, the sign is inverted
-    """
-    # Load cell characteristics
-    sensitivity = 2  # mV/V (load cell)
-    Vcc = 5  # V
-    max_load = 1000  # kg
-
-    # HX711
-    n_bits = 24  # 24-bit ADC (HX711)
-    gain = 128
-    sensitivity_hx711 = 20  # mV (+-20mV)
-    bits_max = 2**(n_bits-1) - 1  # Maximum positive value for signed 24-bit ADC
-    hx711_V_range = gain * sensitivity_hx711 * 0.001  # V (positive and negative values)
-    inverted_sign = True
-
-    # Weight obtention
-    V = bits * hx711_V_range / bits_max  # amplified measured V
-    V = V / gain  # original V (before gain)
-    kg = V * 1000 / (sensitivity * Vcc) * max_load  # Load cell has a linear response
-
-    if inverted_sign:
-        kg = -kg
-
-    return kg
-
-
-def from_t_ms_to_s(t_ms):
-    """Converts time from ms (from arduinio) to s"""
-    return t_ms / 1000
-
-
-def connect_arduino(port, baud_rate):
-    """
-    Function Duties:
-        Establish a serial connection and return the Serial object.
-    Input: (check .ino file to see the port and baud rate)
-        port: COM port where the Arduino is connected
-        baud_rate: communication speed (e.g. 9600)
-    Output:
-        ser: Serial object or None if the connection fails
-    """
-    try:
-        ser = serial.Serial(port, baud_rate, timeout=1)
-        print(f"[INFO] Conectado a {port}")
-        time.sleep(2)  # Wait for Arduino to be ready
-        return ser
-    except serial.SerialException:
-        print(f"[ERROR] No se pudo abrir el puerto {port}")
-        return None  # No active connection
-
-
-def read_arduino_data_thread(ser, data_queue) -> None:
-    """
-    Function Duties:
-        Continuously reads data from Arduino and stores it in a queue.
-    Input:
-        ser: Serial object
-        data_queue: Queue to store the data
-    Output:
-        None (it will be in a thread)
-    """
-    while True:
-        if ser.in_waiting > 0:  # Check if data is available
-            try:
-                data = ser.readline().decode('utf-8').strip()
-                if data:
-                    delta_t, bits_hx711, bits_potentiometer = data.split()
-                    # Store data in queue
-                    data_queue.put(
-                        (int(delta_t), int(bits_hx711), int(bits_potentiometer)))
-            except ValueError:
-                print("[ERROR] Formato de datos incorrecto:", data)
-                continue  # Skip bad data
-
-
-def update_graph(frame, fig, ax1, ax2, data_queue, data_time, data_mass,
-                 data_deflections, pause,
+def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw_mass,
+                 raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration,
                  n_readings=200):
     """
     Function Duties:
         Updates the mass and deflection graph (which is a single figure with 2 axes)
-        full list of values data_time, data_mass, data_deflections
+        full list of values raw_time, raw_mass, raw_deflection
     Inputs:
         - frame: Required for FuncAnimation (unused inside the function)
         - fig: The Matplotlib figure object to update
         - ax1: First subplot (Mass vs Time)
         - ax2: Second subplot (Deflection vs Time)
-        - data_time: List storing time values
-        - data_mass: List storing mass readings
-        - data_deflections: List storing deflection readings
+        - raw_time: List storing time values
+        - raw_mass: List storing mass readings
+        - raw_deflection: List storing deflection readings
         - pause: Boolean indicating whether updates are paused
         - n_readings: Number of readings to display
     """
@@ -202,32 +63,122 @@ def update_graph(frame, fig, ax1, ax2, data_queue, data_time, data_mass,
     if pause:
         return  # If paused, do not update
 
-    process_data(data_queue, data_time, data_mass, data_deflections)
+    process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
+                 processed_deflection)
 
     # Update first graph
     ax1.clear()
-    ax1.plot(data_time[-n_readings:], data_mass[-n_readings:], label="Célula de carga", color="blue")
+    ax1.plot(raw_time[-n_readings:], processed_mass[-n_readings:], label="Célula de carga", color="blue")
     ax1.set_title("Carga Aplicada")
     ax1.set_xlabel("Tiempo (s)")
     ax1.set_ylabel("Masa (kg)")
     ax1.legend(loc="lower left")
-    ax1.set_ylim([-1, max(data_mass) + 5])
+    ax1.set_ylim([-1, max(raw_mass) + 5])
 
     # Update second graph
     ax2.clear()
-    ax2.plot(data_time[-n_readings:], data_deflections[-n_readings:], label="Potenciómetro", color="red")
+    ax2.plot(raw_time[-n_readings:], processed_deflection[-n_readings:], label="Potenciómetro", color="red")
     ax2.set_title("Flecha en Centro de Vano")
     ax2.set_xlabel("Tiempo (s)")
     ax2.set_ylabel("Flecha (mm)")
-    ax2.set_ylim([-150, max(data_deflections) + 5])
+    ax2.set_ylim([-150, max(raw_deflection) + 5])
     ax2.legend(loc="lower left")
 
-    # if mass is not None and deflection is not None:
-    #     delta_t = datetime.datetime.now().timestamp() - last_timestamp
-    #     last_timestamp = datetime.datetime.now().timestamp()
-    print(f"Tiempo: {data_time[-1]:.4f} s | Peso (HX711): {data_mass[-1]:.3f} kg | Flecha: {data_deflections[-1]:.3f} mm")
+    print(f"Time: {raw_time[-1]:.2f} s | Raw mass: {raw_mass[-1]:.3f} kg | Raw Deflection: {raw_deflection[-1]:.3f} mm | Processed Mass: {processed_mass[-1]:.3f} kg | Processed Deflection: {processed_deflection[-1]:.3f} mm")
 
     fig.tight_layout()  # Adjust layout for clarity
+
+
+def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
+                           raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection,
+                           pause, callibration, n_readings=200):
+    """
+    Function Duties:
+        Updates the mass and deflection graph (which is a single figure with 2 axes)
+        full list of values raw_time, raw_mass, raw_deflection
+    Inputs:
+        - frame: Required for FuncAnimation (unused inside the function)
+        - fig: The Matplotlib figure object to update
+        - ax1: First subplot (Mass vs Time)
+        - ax2: Second subplot (Deflection vs Time)
+        - raw_time: List storing time values
+        - raw_mass: List storing mass readings
+        - raw_deflection: List storing deflection readings
+        - pause: Boolean indicating whether updates are paused
+        - n_readings: Number of readings to display
+    """
+    n_readings = 200
+    if pause:
+        return  # If paused, do not update
+
+    process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
+                 processed_deflection)
+
+    stiffness = [m/d if d != 0 else 0 for m, d in zip(processed_mass, processed_deflection)]
+
+    # Update first graph
+    ax.clear()
+    ax.plot(raw_time[-n_readings:], stiffness[-n_readings:], label="Rigidez", color="black")
+    ax.set_title(f"Máx. Carga: {format(max(processed_mass[1:]), '.2f')}kg; Máx. Flecha: {format(max(processed_deflection[1:]), '.2f')}mm")
+    ax.set_xlabel("Tiempo (s)")
+    ax.set_ylabel("Rigidez (kg/mm)")
+    ax.legend(loc="lower left")
+    # ax.set_ylim([-1, max(stiffness) + 5])
+
+    fig.tight_layout()  # Adjust layout for clarity
+
+
+
+def process_data(data_queue, raw_time, raw_mass, raw_deflection,
+                 processed_mass, processed_deflection) -> None:
+    """
+    Function Duties:
+        Retrieves and processes the latest available data from the queue.
+    Inputs:
+        - data_queue: Queue storing incoming sensor data
+        - raw_time: List storing time values
+        - raw_mass: List storing mass readings
+        - raw_deflection: List storing deflection readings
+    Output:
+        None
+        They are global variables that get updated, no need to return them
+    """
+    global zero_mass, zero_deflection, callibration, callibration_time
+    latest_t = raw_time[-1] if raw_time else 0  # Last time value or 0 if empty
+    queue_time, queue_mass, queue_deflection = [], [], []
+
+    while not data_queue.empty():
+        delta_t, bits_hx711, bits_potentiometer = data_queue.get()
+        delta_t = outils.from_t_ms_to_s(delta_t)
+        mass = outils.from_bits_to_kg(bits_hx711)
+        deflection = outils.from_bits_to_deflection(bits_potentiometer)
+        latest_t += delta_t
+        queue_time.append(latest_t)
+        queue_mass.append(mass)
+        queue_deflection.append(deflection)
+    with lock:  # Avoid problems with different threads managing the same variables
+        raw_time += queue_time
+        raw_mass += queue_mass
+        raw_deflection += queue_deflection
+        processed_mass += [m - zero_mass for m in queue_mass]
+        processed_deflection += [d - zero_deflection for d in queue_deflection]
+    if callibration:
+        zero_mass = sum(queue_mass) / len(queue_mass)
+        zero_deflection = sum(queue_deflection) / len(queue_deflection)
+        callibration_time = queue_time[-1] - queue_time[0]
+        callibration = False
+
+    
+    # else:
+    #     if len(raw_time) > 0:
+    #         # print("[WARNING] No se pudo leer datos, reutilizando último valor.")
+    #         t, mass, deflection = raw_time[-1], raw_mass[-1], raw_deflection[-1]
+    #     else:  # First measurement
+    #         t, mass, deflection = 0, 0, 0  # Default values if no previous data
+
+    #     raw_time.append(t)
+    #     raw_mass.append(mass)
+    #     raw_deflection.append(deflection)
 
 
 def close_app(ser):
@@ -235,22 +186,22 @@ def close_app(ser):
     Function Duties:
         Handle GUI closing and KeyboardInterrupt
     Input:
-        ser: Serial object (from connect_arduino)
+        ser: Serial object (from outils.connect_arduino)
     """
     print("\n[INFO] Closing application...")
 
-    # Stop Matplotlib animation (check if ani exists)
-    if 'ani' in globals():
-        ani.event_source.stop()
+    # Stop Matplotlib animation (check if ani_1 exists)
+    if 'ani_1' in globals():
+        ani_1.event_source.stop()
 
     # Close Serial Connection
     if ser is not None and ser.is_open:
         print("[INFO] Closing serial connection...")
         ser.close()
 
-    # Clear the queue
-    with data_queue.mutex:
-        data_queue.queue.clear()
+    # # Clear the queue
+    # with data_queue.mutex:
+    #     data_queue.queue.clear()
 
     root.quit()
     root.destroy()
@@ -274,43 +225,115 @@ def update_pause_state():
     pause = toggle_pause(pause)  # Store updated value
 
 
-def process_data(data_queue, data_time, data_mass, data_deflections) -> None:
+def toggle_measurement():
     """
     Function Duties:
-        Retrieves and processes the latest available data from the queue.
-    Inputs:
-        - data_queue: Queue storing incoming sensor data
-        - data_time: List storing time values
-        - data_mass: List storing mass readings
-        - data_deflections: List storing deflection readings
-    Output:
-        None
-        They are global variables that get updated, no need to return them
+        Toggles between "Start Measurement" and "Stop Measurement" states.
+        Also triggers calibration when first started.
     """
+    global measurement_running, zero_mass, zero_deflection, pause, callibration
+    measurement_running = not measurement_running  # Toggle state
+    if measurement_running:
+        pause = True
+        callibration = True
+    if callibration:
+        start_button.config(text="Please Wait...", style="Danger.TButton")  # Change button appearance
+        callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, zero_deflection)
 
-    latest_t = data_time[-1] if data_time else 0  # Last time value or 0 if empty
-
-    while not data_queue.empty():
-        delta_t, bits_hx711, bits_potentiometer = data_queue.get()
-        delta_t = from_t_ms_to_s(delta_t)
-        mass = from_bits_to_kg(bits_hx711)
-        deflection = from_bits_to_deflection(bits_potentiometer)
-        latest_t += delta_t
-        with lock:  # Avoid problems with different threads managing the same variables
-            data_time.append(latest_t)
-            data_mass.append(mass)
-            data_deflections.append(deflection)
+    if measurement_running:
+        print("[INFO] Measurement started.")
+        start_button.config(text="Stop Measurement", style="Danger.TButton")  # Change button appearance
     else:
-        if len(data_time) > 0:
-            # print("[WARNING] No se pudo leer datos, reutilizando último valor.")
-            t, mass, deflection = data_time[-1], data_mass[-1], data_deflections[-1]
-        else:  # First measurement
-            t, mass, deflection = 0, 0, 0  # Default values if no previous data
+        print("[INFO] Measurement stopped.")
+        start_button.config(text="Start Measurement", style="Primary.TButton")  # Reset button
+        save_data_to_file(callibration_dict)
 
-        data_time.append(t)
-        data_mass.append(mass)
-        data_deflections.append(deflection)
 
+def save_backup_data_thread(callibration_dict):
+    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection, measurement_running
+
+    while True:
+        if measurement_running:
+            time.sleep(10)  # Save data every 10 seconds
+            folder = os.path.join("data", "backup")
+            os.makedirs(folder, exist_ok=True)
+
+            i = list(callibration_dict.keys())[-1]
+            idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"]
+
+            data_dict = {
+                "time": raw_time[idx_ini:],
+                "raw_mass": raw_mass[idx_ini:],
+                "raw_deflection": raw_deflection[idx_ini:],
+                "processed_mass": processed_mass[idx_ini:],
+                "processed_deflection": processed_deflection[idx_ini:],
+                "callibration": callibration_dict
+            }
+
+            # Save data to a JSON file
+            file_name = f"data_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+            with open(os.path.join(folder, file_name), "w") as f:
+                json.dump(data_dict, f, indent=4)
+        else:
+            time.sleep(0.2)
+
+
+def save_data_to_file(callibration_dict):
+    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection
+
+    folder = os.path.join("data")
+    os.makedirs(folder, exist_ok=True)
+
+    i = list(callibration_dict.keys())[-1]
+    idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"]
+
+    data_dict = {
+        "time": raw_time[idx_ini:],
+        "raw_mass": raw_mass[idx_ini:],
+        "raw_deflection": raw_deflection[idx_ini:],
+        "processed_mass": processed_mass[idx_ini:],
+        "processed_deflection": processed_deflection[idx_ini:],
+        "callibration": callibration_dict
+    }
+
+    # Save data to a JSON file
+    file_name = f"data_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    with open(os.path.join(folder, file_name), "w") as f:
+        json.dump(data_dict, f, indent=4)
+
+
+# def start_measurement(raw_time, raw_mass, raw_deflection):
+
+
+def callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, zero_deflection):
+    global pause, callibration, callibration_time
+
+    callibration_time = 5  # seconds
+    callibration = True
+    pause = True
+    print(f"[INFO] Iniciando medición en {callibration_time} segundos...")
+    idx_ini = len(raw_time) - 1
+    t_ini = raw_time[idx_ini]
+    time.sleep(callibration_time)
+    process_data(data_queue, raw_time, raw_mass, raw_deflection,
+                 processed_mass, processed_deflection)
+    t_end = t_ini + callibration_time  # callibration_time is updated in process_data
+    callibration = False
+    pause = False
+
+    # Save data in a callibration dictionary
+    idx_callibration_start = len(raw_time) - 1
+    i = list(callibration_dict.keys())[-1] + \
+        1 if len(callibration_dict) > 0 else 0
+    callibration_dict[i] = {"callibration":
+                            {"t_ini_callibration": t_ini,
+                             "t_end_callibration": t_end,
+                             "zero_mass": zero_mass,
+                             "zero_deflection": zero_deflection},
+                            "raw_processed_data":
+                                {"time": raw_time[idx_callibration_start],
+                                 "idx_ini": idx_callibration_start}
+                            }
 
 
 
@@ -324,33 +347,44 @@ logo_folder = "logos"
 logo_ugr_name = "ugr.png"
 logo_etsiccp_name = "etsiccp.png"
 logo_grupo_puentes_name = "grupo_puentes.png"
-arduino_port = "COM12"
+arduino_port = "COM11"
 baud_rate = 9600
 
 # Sensor Data
-data_time, data_mass, data_deflections = [0], [0], [0]  # Starting values
+raw_time, raw_mass, raw_deflection = [0], [0], [0]  # Starting values
+processed_time, processed_mass, processed_deflection = [0], [0], [0]  # Starting values
+zero_time, zero_mass, zero_deflection = 0, 0, 0  # Null values for callibration
 pause = False  # Variable to track if data updates are paused
+callibration = False
+callibration_dict = {}
+measurement_running = False
 ser = None  # Serial connection
 
 # Create a global Queue to store incoming serial data
-
-ser = connect_arduino(arduino_port, baud_rate)
-run_arduino_thread = False
-if ser is None or not ser.is_open:  # Check connection before starting thread
-    print("[WARNING] No active serial connection. Attempting to reconnect...")
-    ser = connect_arduino(arduino_port, baud_rate)
-    if ser is None:
-        print("[ERROR] Unable to establish connection. Data thread will NOT start.")
+simulated = True
+if simulated:
+    lock = threading.Lock()
+    data_queue = queue.Queue()
+    threading.Thread(target=outils.simulated_data_thread, args=(data_queue,), daemon=True).start()
+    threading.Thread(target=save_backup_data_thread, args=(callibration_dict,), daemon=True).start()
+else:
+    ser = outils.connect_arduino(arduino_port, baud_rate)
+    run_arduino_thread = False
+    if ser is None or not ser.is_open:  # Check connection before starting thread
+        print("[WARNING] No active serial connection. Attempting to reconnect...")
+        ser = outils.connect_arduino(arduino_port, baud_rate)
+        if ser is None:
+            print("[ERROR] Unable to establish connection. Data thread will NOT start.")
+        else:
+            run_arduino_thread = True
     else:
         run_arduino_thread = True
-else:
-    run_arduino_thread = True
 
-if run_arduino_thread:
-    lock = threading.Lock()  # it avoids problems with different threads managing the same variables
-    data_queue = queue.Queue()
-    threading.Thread(target=read_arduino_data_thread, args=(ser, data_queue), daemon=True).start()
-
+    if run_arduino_thread:
+        lock = threading.Lock()  # it avoids problems with different threads managing the same variables
+        data_queue = queue.Queue()
+        threading.Thread(target=outils.read_arduino_data_thread, args=(ser, data_queue), daemon=True).start()
+        threading.Thread(target=save_backup_data_thread, args=(callibration_dict,), daemon=True).start()
 
 
 # Tkinter GUI Setup
@@ -441,9 +475,10 @@ bottom_container = tk.Frame(root)
 bottom_container.grid(row=2, column=0, sticky="sew", padx=10, pady=5)
 root.grid_rowconfigure(2, weight=0)
 
-# Start Measurement Button (Left Side)
-start_button = ttk.Button(bottom_container, text="Start Measurement")
-start_button.pack(side=tk.LEFT, padx=10)  # Positioned on the left
+# Start/Stop Measurement Button (Left Side)
+start_button = ttk.Button(bottom_container, text="Start Measurement", command=toggle_measurement, style="Primary.TButton")
+start_button.pack(side=tk.LEFT, padx=10)
+
 
 # Pause Button (Right Side)
 pause_button = ttk.Button(
@@ -454,21 +489,22 @@ pause_button = ttk.Button(
 pause_button.pack(side=tk.RIGHT, padx=10)
 
 # Run Matplotlib animation
-last_time = datetime.datetime.now()
-last_timestamp = last_time.timestamp()  # Convert to timestamp
-ani = FuncAnimation(
+ani_1 = FuncAnimation(
     fig_left,
-    lambda frame: update_graph(frame, fig_left, ax1, ax2, data_queue, data_time, data_mass, data_deflections, pause, last_timestamp),
+    lambda frame: update_mass_deflection_graph(frame, fig_left, ax1, ax2, data_queue, raw_time, raw_mass,
+                                               raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration),
+    interval=refresh_time,
+    cache_frame_data=False
+)
+ani_2 = FuncAnimation(
+    fig_right,
+    lambda frame2: update_stiffness_graph(frame2, fig_right, ax3, data_queue, raw_time, raw_mass,
+                                          raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration),
     interval=refresh_time,
     cache_frame_data=False
 )
 
-
-
 root.protocol("WM_DELETE_WINDOW", lambda: close_app(ser))
-
-
-
 # Run Tkinter main loop
 try:
     root.mainloop()

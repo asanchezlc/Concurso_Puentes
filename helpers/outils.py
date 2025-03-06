@@ -1,7 +1,7 @@
 
-import serial
 import time
-import datetime
+import serial
+
 
 def from_bits_to_deflection(bits):
     """
@@ -99,6 +99,7 @@ def from_t_ms_to_s(t_ms):
     return t_ms / 1000
 
 
+
 def connect_arduino(port, baud_rate):
     """
     Function Duties:
@@ -119,18 +120,17 @@ def connect_arduino(port, baud_rate):
         return None  # No active connection
 
 
-
-def read_arduino_data():
-    """Continuously reads data from Arduino and stores it in a queue."""
-    global ser
-
+def read_arduino_data_thread(ser, data_queue) -> None:
+    """
+    Function Duties:
+        Continuously reads data from Arduino and stores it in a queue.
+    Input:
+        ser: Serial object
+        data_queue: Queue to store the data
+    Output:
+        None (it will be in a thread)
+    """
     while True:
-        if ser is None or not ser.is_open:
-            print("[WARNING] Conexión perdida. Intentando reconectar...")
-            connect_arduino()
-            time.sleep(1)
-            continue  # Retry connection
-
         if ser.in_waiting > 0:  # Check if data is available
             try:
                 data = ser.readline().decode('utf-8').strip()
@@ -144,82 +144,20 @@ def read_arduino_data():
                 continue  # Skip bad data
 
 
-def update_graph(frame):
-    """Function to update the graphs"""
-    global time_data, data_mass, data_deflections, pause, last_timestamp
 
-    if pause or ser is None:  # If paused or no serial connection, do not update
-        return
-
-    # Retrieve the latest available data from the queue
-    if len(time_data) > 0:
-        t = time_data[-1]
-    else:
-        t = 0
-    while not data_queue.empty():
-        delta_t, bits_hx711, bits_potentiometer = data_queue.get()
-        delta_t = from_t_ms_to_s(delta_t)
-        mass = from_bits_to_kg(bits_hx711)
-        deflection = from_bits_to_deflection(bits_potentiometer)
-        t = delta_t + t
-        time_data.append(t)
-        data_mass.append(mass)
-        data_deflections.append(deflection)
-    else:
-        if len(time_data) > 0:
-            # print("[WARNING] No se pudo leer datos, reutilizando último valor.")
-            t, mass, deflection = time_data[-1], data_mass[-1], data_deflections[-1]
-        else:  # First measurement
-            t, mass, deflection = 0, 0, 0  # Default values if no previous data
-
-        time_data.append(t)
-        data_mass.append(mass)
-        data_deflections.append(deflection)
-
-    n_readings = 200
-
-    # Update first graph
-    ax1.clear()
-    ax1.plot(time_data[-n_readings:], data_mass[-n_readings:],
-             label="Célula de carga", color="blue")
-    ax1.set_title("Carga Aplicada")
-    ax1.set_xlabel("Tiempo (s)")
-    ax1.set_ylabel("Masa (kg)")
-    ax1.legend(loc="lower left")
-    ax1.set_ylim([0, max(data_mass) + 5])
-
-    # Update second graph
-    ax2.clear()
-    ax2.plot(time_data[-n_readings:], data_deflections[-n_readings:],
-             label="Potenciómetro", color="red")
-    ax2.set_title("Flecha en Centro de Vano")
-    ax2.set_xlabel("Tiempo (s)")
-    ax2.set_ylabel("Flecha (mm)")
-    ax2.set_ylim([0, max(data_deflections) + 5])
-    ax2.legend(loc="lower left")
-
-    if not (mass is None and deflection is None):
-        delta_t = datetime.datetime.now().timestamp() - last_timestamp
-        last_timestamp = datetime.datetime.now().timestamp()
-        print(
-            f"Tiempo: {t:.0f} | Peso (HX711): {mass:.3f} kg | Voltaje (Potenciómetro): {deflection:.3f} mm | Δt: {delta_t:.4f} s")
-
-    fig_left.tight_layout()
-
-
-def close_app():
-    """Handle GUI closing and KeyboardInterrupt"""
-    print("\n[INFO] Closing application...")
-    ani.event_source.stop()
-    if ser:
-        ser.close()
-    root.quit()
-    root.destroy()
-
-
-def toggle_pause():
-    """Function to toggle pause/display"""
-    global pause
-    pause = not pause  # Toggle state
-    # Change button text
-    pause_button.config(text="Display" if pause else "Pause")
+def simulated_data_thread(data_queue) -> None:
+    """
+    Function Duties:
+        Continuously reads data from Arduino and stores it in a queue.
+    Input:
+        ser: Serial object
+        data_queue: Queue to store the data
+    Output:
+        None (it will be in a thread)
+    """
+    import numpy as np
+    while True:
+        delta_t, bits_hx711, bits_potentiometer = 50, np.random.randint(0, 2**10), np.random.randint(0, 2**6)
+        data_queue.put(
+            (int(delta_t), int(bits_hx711), int(bits_potentiometer)))
+        time.sleep(delta_t / 1000)  # Convert ms to seconds

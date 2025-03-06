@@ -42,8 +42,7 @@ IMPORTANT NOTES ABOUT CODE ARCHITECTURE:
 """
 
 def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw_mass,
-                 raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration,
-                 n_readings=200):
+                 raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection, pause, callibration):
     """
     Function Duties:
         Updates the mass and deflection graph (which is a single figure with 2 axes)
@@ -59,29 +58,38 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
         - pause: Boolean indicating whether updates are paused
         - n_readings: Number of readings to display
     """
-    n_readings = 200
+    # n_readings = 200
     if pause:
         return  # If paused, do not update
 
     process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
                  processed_deflection)
 
+    if len(callibration_dict) > 0:
+        i = list(callibration_dict.keys())[-1]
+        idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"]
+    else:
+        idx_ini = 0
+    # idx_ini += 1
+
     # Update first graph
     ax1.clear()
-    ax1.plot(raw_time[-n_readings:], processed_mass[-n_readings:], label="Célula de carga", color="blue")
+    ax1.plot(raw_time[idx_ini:], processed_mass[idx_ini:], label="Célula de carga", color="blue")
+    # ax1.plot(raw_time[-n_readings:], processed_mass[-n_readings:], label="Célula de carga", color="blue")
     ax1.set_title("Carga Aplicada")
     ax1.set_xlabel("Tiempo (s)")
     ax1.set_ylabel("Masa (kg)")
     ax1.legend(loc="lower left")
-    ax1.set_ylim([-1, max(raw_mass) + 5])
+    ax1.set_ylim([min(processed_mass[idx_ini:])-2, max(processed_mass[idx_ini:]) + 50])
 
     # Update second graph
     ax2.clear()
-    ax2.plot(raw_time[-n_readings:], processed_deflection[-n_readings:], label="Potenciómetro", color="red")
+    ax2.plot(raw_time[idx_ini:], processed_deflection[idx_ini:], label="Potenciómetro", color="red")
+    # ax2.plot(raw_time[-n_readings:], processed_deflection[-n_readings:], label="Potenciómetro", color="red")
     ax2.set_title("Flecha en Centro de Vano")
     ax2.set_xlabel("Tiempo (s)")
     ax2.set_ylabel("Flecha (mm)")
-    ax2.set_ylim([-150, max(raw_deflection) + 5])
+    ax2.set_ylim([min(processed_deflection[idx_ini:])-5, max(processed_deflection[idx_ini:]) + 5])
     ax2.legend(loc="lower left")
 
     print(f"Time: {raw_time[-1]:.2f} s | Raw mass: {raw_mass[-1]:.3f} kg | Raw Deflection: {raw_deflection[-1]:.3f} mm | Processed Mass: {processed_mass[-1]:.3f} kg | Processed Deflection: {processed_deflection[-1]:.3f} mm")
@@ -91,7 +99,7 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
 
 def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
                            raw_deflection, processed_mass, processed_deflection, zero_mass, zero_deflection,
-                           pause, callibration, n_readings=200):
+                           pause, callibration):
     """
     Function Duties:
         Updates the mass and deflection graph (which is a single figure with 2 axes)
@@ -107,22 +115,34 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
         - pause: Boolean indicating whether updates are paused
         - n_readings: Number of readings to display
     """
-    n_readings = 200
+    # n_readings = 200
     if pause:
         return  # If paused, do not update
 
     process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
                  processed_deflection)
 
-    stiffness = [m/d if d != 0 else 0 for m, d in zip(processed_mass, processed_deflection)]
+    if len(callibration_dict) > 0:
+        i = list(callibration_dict.keys())[-1]
+        idx_ini = callibration_dict[i]["raw_processed_data"]["idx_ini"]
+    else:
+        idx_ini = 0
+    # idx_ini += 1
+    # stiffness = [m/d if d != 0 else 0 for m, d in zip(processed_mass, processed_deflection)]
 
     # Update first graph
     ax.clear()
-    ax.plot(raw_time[-n_readings:], stiffness[-n_readings:], label="Rigidez", color="black")
-    ax.set_title(f"Máx. Carga: {format(max(processed_mass[1:]), '.2f')}kg; Máx. Flecha: {format(max(processed_deflection[1:]), '.2f')}mm")
-    ax.set_xlabel("Tiempo (s)")
-    ax.set_ylabel("Rigidez (kg/mm)")
-    ax.legend(loc="lower left")
+    ax.scatter(processed_deflection[idx_ini:], processed_mass[idx_ini:], label="Rigidez", color="black")
+    ax.set_title(f"Flecha vs Carga; Máx. Carga: {format(max(processed_mass[1:]), '.2f')}kg; Máx. Flecha: {format(max(processed_deflection[1:]), '.2f')}mm")
+    ax.set_xlabel("Flecha (mm)")
+    ax.set_ylabel("Carga (kg)")
+    ax.legend(loc="lower right")
+    x_inf = 0
+    x_max = max(processed_deflection[idx_ini:] + [100])
+    y_inf = 0
+    y_max = max(processed_mass[idx_ini:] + [500])
+    ax.set_xlim([x_inf, x_max])
+    ax.set_ylim([y_inf, y_max])
     # ax.set_ylim([-1, max(stiffness) + 5])
 
     fig.tight_layout()  # Adjust layout for clarity
@@ -237,7 +257,8 @@ def toggle_measurement():
         pause = True
         callibration = True
     if callibration:
-        start_button.config(text="Please Wait...", style="Danger.TButton")  # Change button appearance
+        start_button.config(text="Please Wait...  ", style="Danger.TButton")  # Change button appearance
+        root.update_idletasks()
         callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, zero_deflection)
 
     if measurement_running:
@@ -347,7 +368,7 @@ logo_folder = "logos"
 logo_ugr_name = "ugr.png"
 logo_etsiccp_name = "etsiccp.png"
 logo_grupo_puentes_name = "grupo_puentes.png"
-arduino_port = "COM11"
+arduino_port = "COM12"
 baud_rate = 9600
 
 # Sensor Data
@@ -459,15 +480,32 @@ fig_left, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
 canvas_left = FigureCanvasTkAgg(fig_left, master=main_container)
 canvas_left.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
-# RIGHT SIDE: New Single Plot (ax3)
-fig_right, ax3 = plt.subplots(figsize=(8, 6))  # Single plot on the right
-canvas_right = FigureCanvasTkAgg(fig_right, master=main_container)
-canvas_right.get_tk_widget().grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+# RIGHT SIDE: Now Divided into 2 Sections (Text + Stiffness Plot)
+right_container = tk.Frame(main_container)
+right_container.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
-# Make both sides expand properly
-main_container.grid_columnconfigure(0, weight=1)
-main_container.grid_columnconfigure(1, weight=1)
+# RIGHT-TOP: Small Text Area
+text_frame = tk.Frame(right_container, height=50, bg="lightgray")
+text_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=0)
+text_frame.grid_propagate(False)  # Prevent resizing
+text_label = ttk.Label(text_frame, text="Measurement Info", font=("Arial", 14, "bold"))
+text_label.pack(expand=True)
+
+# RIGHT-BOTTOM: Stiffness Plot (Larger Area)
+fig_right, ax3 = plt.subplots(figsize=(8, 4))  # Single plot on the right
+canvas_right = FigureCanvasTkAgg(fig_right, master=right_container)
+canvas_right.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=5, pady=0)
+
+# Make Right Side Expand Properly (More Height for Plot)
+right_container.grid_rowconfigure(0, weight=2)  # Text area (small)
+right_container.grid_rowconfigure(1, weight=4)  # Plot area (larger)
+right_container.grid_columnconfigure(0, weight=1)
+
+# Make Both Sides Expand Properly
+main_container.grid_columnconfigure(0, weight=1)  # Left plot
+main_container.grid_columnconfigure(1, weight=1)  # Right section
 main_container.grid_rowconfigure(0, weight=1)
+
 
 
 # 3. BOTTOM BUTTONS (Start Measurement & Pause Button)
@@ -478,7 +516,6 @@ root.grid_rowconfigure(2, weight=0)
 # Start/Stop Measurement Button (Left Side)
 start_button = ttk.Button(bottom_container, text="Start Measurement", command=toggle_measurement, style="Primary.TButton")
 start_button.pack(side=tk.LEFT, padx=10)
-
 
 # Pause Button (Right Side)
 pause_button = ttk.Button(

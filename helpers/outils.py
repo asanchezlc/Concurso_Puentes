@@ -81,7 +81,7 @@ def from_bits_to_kg(bits):
     sensitivity_hx711 = 20  # mV (+-20mV)
     bits_max = 2**(n_bits-1) - 1  # Maximum positive value for signed 24-bit ADC
     hx711_V_range = gain * sensitivity_hx711 * 0.001  # V (positive and negative values)
-    inverted_sign = True
+    inverted_sign = False
 
     # Weight obtention
     V = bits * hx711_V_range / bits_max  # amplified measured V

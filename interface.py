@@ -9,14 +9,11 @@ import os
 import json
 import threading
 import time
-
 import datetime
 import queue
-import copy
 
 import helpers.outils as outils
 
-import numpy as np
 """
 File Duties:
 
@@ -32,6 +29,7 @@ The data read is the following:
 - Voltage (V)
 
 2. Update the graphs with the latest data.
+- Plots 
 
 
 IMPORTANT NOTES ABOUT CODE ARCHITECTURE:
@@ -166,8 +164,7 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
     if smooth_plots:
         mass_plot = outils.smooth_with_edges(mass_plot, step_smooth)
         deflection_plot = outils.smooth_with_edges(deflection_plot, step_smooth)
-        if len(t_plot) > step_smooth:
-            t_plot = t_plot[step_smooth:]
+        if len(mass_plot) > step_smooth:
             mass_plot = mass_plot[step_smooth:]
             deflection_plot = deflection_plot[step_smooth:]
 
@@ -187,7 +184,6 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
     # ax.set_ylim([-1, max(stiffness) + 5])
 
     fig.tight_layout()  # Adjust layout for clarity
-
 
 
 def process_data(data_queue, raw_time, raw_mass, raw_deflection,

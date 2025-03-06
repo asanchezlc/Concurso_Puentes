@@ -38,6 +38,17 @@ IMPORTANT NOTES ABOUT CODE ARCHITECTURE:
     - The variables raw_time, raw_mass, and raw_deflection are global and updated
       by the process_data function.
 
+NOTA ADICIONAL:
+El código está muy sucio, necesitaría una refactorización que no me ha dado tiempo a hacer.
+Lo importante es tener en cuenta que:
+
+- los datos en bruto se guardan en las variables raw_time, raw_mass, raw_deflection
+- estos datos se procesan, almacenándose en processed_mass, processed_deflection
+ el procesamiento consiste simplemente en restar el valor de calibración
+  (zero_mass, zero_deflection) a los valores en bruto
+- estas variables (junto con otrasque se van actualizando)son globales, puesto que hay dos hilos corriendo; si se quisiese refactorizar
+el código, habría que definir clases
+
 """
 
 def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw_mass,
@@ -105,7 +116,7 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
     else:
         y_inf, y_max = -2, 500
     ax1.set_ylim([y_inf, y_max])
-    ax1.legend(loc="lower left")
+    ax1.legend(loc="upper left")
 
     # Update second graph
     ax2.clear()
@@ -119,7 +130,7 @@ def update_mass_deflection_graph(frame, fig, ax1, ax2, data_queue, raw_time, raw
     else:
         y_inf, y_max = -5, 5
     ax2.set_ylim([y_inf, y_max])
-    ax2.legend(loc="lower left")
+    ax2.legend(loc="upper left")
 
     print(f"Time: {raw_time[-1]:.2f} s | Raw mass: {raw_mass[-1]:.3f} kg | Raw Deflection: {raw_deflection[-1]:.3f} mm | Processed Mass: {processed_mass[-1]:.3f} kg | Processed Deflection: {processed_deflection[-1]:.3f} mm")
 
@@ -374,7 +385,7 @@ def update_measurement_info():
     """
     Function to update the measurement info panel in real time.
     """
-    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection
+    global raw_time, raw_mass, raw_deflection, processed_mass, processed_deflection, refresh_time
     process_data(data_queue, raw_time, raw_mass, raw_deflection, processed_mass,
                  processed_deflection, threshold_mass_peaks)
 
@@ -394,7 +405,7 @@ def update_measurement_info():
     text_label.config(text=f"CARGA MÁX.: {max_mass:.2f} kg        FLECHA MÁX.: {max_deflection:.2f} mm")
 
     # Schedule the next update (every 1 second)
-    text_label.after(1000, update_measurement_info)
+    text_label.after(refresh_time, update_measurement_info)
 
 
 
@@ -427,13 +438,12 @@ def callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, ze
                                 {"time": raw_time[idx_callibration_start],
                                  "idx_ini": idx_callibration_start}
                             }
-
+# -----------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------
-
-# MAIN
-# Variables for GUI configuration
+# MODIFIABLE VARIABLES
+# -----------------------------------------------------------------------------
 refresh_time = 1000  # ms
 arduino_port = "COM12"
 baud_rate = 9600
@@ -441,6 +451,10 @@ smooth_plots = True
 step_smooth = 3  # Number of points to smooth (before and after)
 threshold_mass_peaks = 50  # kg
 simulated = True
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
+# GUI Variables
 GUI_title = "Fase Provincial - II Concurso Nacional de Puentes Agustín de Betancourt - ETSICCP GRANADA"
 logo_folder = "logos"
 logo_ugr_name = "ugr.png"
@@ -538,12 +552,7 @@ try:
 except:
     print("[ERROR] No se pudo cargar una o más imágenes de los logos.")
 
-# # 2. MAIN GRAPHS (Matplotlib)
-# fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 6))
-# canvas = FigureCanvasTkAgg(fig, master=root)
-# canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew")
-
-# MAIN CONTAINER (Splitting Left & Right Sections)
+# 2. MAIN CONTAINER (Splitting Left & Right Sections)
 main_container = tk.Frame(root)
 main_container.grid(row=1, column=0, sticky="nsew")
 root.grid_rowconfigure(1, weight=1)
@@ -567,7 +576,6 @@ text_frame.grid_propagate(False)  # Prevent resizing
 text_label = tk.Label(text_frame, text="Measurement Info", font=("Arial", 18, "bold"),
                       fg="lime", bg="black")  # Green text, black background
 text_label.pack(expand=True)
-
 
 # RIGHT-BOTTOM: Stiffness Plot (Larger Area)
 fig_right, ax3 = plt.subplots(figsize=(8, 4))  # Single plot on the right

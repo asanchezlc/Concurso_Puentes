@@ -1,5 +1,0 @@
-Guardar csv
-Aclarar variables locales y globales
-Please wait no se muestra
-
-Pensar si la shunt resistor afecta o no a la intensidad saliente

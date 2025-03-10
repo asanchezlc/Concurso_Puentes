@@ -187,9 +187,9 @@ def update_stiffness_graph(frame, fig, ax, data_queue, raw_time, raw_mass,
     ax.set_ylabel("Carga (kg)")
     ax.legend(loc="lower right")
     x_inf = 0
-    x_max = max(deflection_plot + [100])
+    x_max = max(deflection_plot + [5])
     y_inf = 0
-    y_max = max(mass_plot + [500])
+    y_max = max(mass_plot + [20])
     ax.set_xlim([x_inf, x_max])
     ax.set_ylim([y_inf, y_max])
     # ax.set_ylim([-1, max(stiffness) + 5])
@@ -450,7 +450,7 @@ baud_rate = 9600
 smooth_plots = True
 step_smooth = 3  # Number of points to smooth (before and after)
 threshold_mass_peaks = 50  # kg
-simulated = True
+simulated = False
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 

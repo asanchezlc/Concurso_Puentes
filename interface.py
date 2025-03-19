@@ -26,7 +26,7 @@ DOCTORADO_CODES -> ARDUINO -> Potentiometer -> Potentiometer
 The data read is the following:
 - Delta Time (ms): Time elapsed since last reading
 - HX711 Value (bits)
-- Voltage (V)
+- Voltage (bits)
 
 2. Update the graphs with the latest data.
 - Plots 
@@ -46,8 +46,18 @@ Lo importante es tener en cuenta que:
 - estos datos se procesan, almacenándose en processed_mass, processed_deflection
  el procesamiento consiste simplemente en restar el valor de calibración
   (zero_mass, zero_deflection) a los valores en bruto
-- estas variables (junto con otrasque se van actualizando)son globales, puesto que hay dos hilos corriendo; si se quisiese refactorizar
-el código, habría que definir clases
+- estas variables (junto con otras que se van actualizando) son globales ya que hay
+dos hilos corriendo y no he sabido ejecutar el código sin hacer uso de variables globales;
+si se quisiese refactorizar el proyecto, habría que indagar cómo trabajar con variables globales
+que, no obstante, permitan meter funciones en otro fichero (outils), etc.
+Creo que para hacer esto bien habría que usar clases, pero habría que indagarlo en cualquier caso.
+
+IMPORTANTE II:
+Aunque los únicos datos que se guardan son los 'raw' (brutos) y 'processed' (brutos menos la media
+obtenida en la calibración), el ploteo de los datos está aún más procesado. Concretamente:
+- Se le aplica un filtro de picos a los datos de masa, ya que se constató que la célula de carga
+registra picos (ruido eléctrico o similar); este filtro está controlado por la variable threshold_mass_peaks
+- Se aplica un promediado para que la gráfica sea más suave; este promediado se controla con la variable step_smooth
 
 """
 

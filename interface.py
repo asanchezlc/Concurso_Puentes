@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image, ImageTk  # Import Pillow for image handling
+from datetime import date
 import os
 import json
 import threading
@@ -448,6 +449,22 @@ def callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, ze
                                 {"time": raw_time[idx_callibration_start],
                                  "idx_ini": idx_callibration_start}
                             }
+
+
+def to_roman(n: int) -> str:
+    if not (1 <= n <= 3999):
+        raise ValueError("El número debe estar entre 1 y 3999 para romanos estándar.")
+    vals = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+        (10, "X"), (9, "IX"), (5, "V"), (4, "IV"),
+        (1, "I")
+    ]
+    res = []
+    for v, sym in vals:
+        q, n = divmod(n, v)
+        res.append(sym * q)
+    return "".join(res)
 # -----------------------------------------------------------------------------
 
 
@@ -455,7 +472,7 @@ def callibrate_mass_deflection(raw_time, raw_mass, raw_deflection, zero_mass, ze
 # MODIFIABLE VARIABLES
 # -----------------------------------------------------------------------------
 refresh_time = 1000  # ms
-arduino_port = "COM12"
+arduino_port = "COM6"
 baud_rate = 9600
 smooth_plots = True
 step_smooth = 3  # Number of points to smooth (before and after)
@@ -465,7 +482,9 @@ simulated = False
 # -----------------------------------------------------------------------------
 
 # GUI Variables
-GUI_title = "Fase Provincial - II Concurso Nacional de Puentes Agustín de Betancourt - ETSICCP GRANADA"
+year = date.today().year
+num = to_roman(year - 2023)
+GUI_title = f"Fase Provincial - {num} Concurso Nacional de Puentes Agustín de Betancourt - ETSICCP GRANADA"
 logo_folder = "logos"
 logo_ugr_name = "ugr.png"
 logo_etsiccp_name = "etsiccp.png"

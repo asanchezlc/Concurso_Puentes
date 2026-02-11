@@ -21,8 +21,7 @@ File Duties:
 1. Connect to Arduino and read data from serial port.
 
 In this case, data from 2 sensors is read; the arduino code is Potentiometer.ino
-located in:
-DOCTORADO_CODES -> ARDUINO -> Potentiometer -> Potentiometer
+located in arduino folder of this project
 
 The data read is the following:
 - Delta Time (ms): Time elapsed since last reading
